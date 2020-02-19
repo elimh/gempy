@@ -204,7 +204,7 @@ class Plot2D:
             if extent_val[3] < extent_val[2]:  # correct vertical orientation of plot
                 ax.invert_yaxis()
             self._aspect = (extent_val[3] - extent_val[2]) / (extent_val[1] - extent_val[0])/ve
-            print(self._aspect)
+            #print(self._aspect)
             ax.set_xlim(extent_val[0], extent_val[1])
             ax.set_ylim(extent_val[2], extent_val[3])
         ax.set_aspect('equal')
