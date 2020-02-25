@@ -291,10 +291,10 @@ def plot_section_by_name(model, section_name, show_faults=True, show_topo=True, 
                               show_data=show_data, show_all_data=show_all_data, radius=radius, contourplot=contourplot)
 
 
-def plot_all_sections(model, show_data=False, section_names=None, show_topo=True, figsize=(12, 12)):
+def plot_all_sections(model, show_data=False, section_names=None, show_topo=True, figsize=(12, 12), prettify=True):
     plot = PlotSolution(model)
     plot.plot_all_sections(show_data=show_data, section_names=section_names, show_topo=show_topo,
-                           figsize=figsize)
+                           figsize=figsize, prettify=prettify)
 
 
 def plot_section(model, cell_number=13, block=None, direction="y", interpolation='none',

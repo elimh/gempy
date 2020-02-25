@@ -587,7 +587,7 @@ class PlotSolution(PlotData2D):
                          colors=self._cmap.colors[f_id], linestyles='solid')
 
     def plot_section_by_name(self, section_name, show_data=True, show_faults=True, show_topo=True,
-                             show_all_data=False, contourplot=True, radius='default', **kwargs):
+                             show_all_data=False, contourplot=True, radius='default', prettify=True, **kwargs):
 
         if self.model.solutions.sections is None:
             raise AttributeError('no sections for plotting defined')
@@ -617,16 +617,21 @@ class PlotSolution(PlotData2D):
             if self.model.grid.topography is not None:
                 alpha = kwargs.get('alpha', 1)
                 xy = self.make_topography_overlay_4_sections(j)
-                axes.fill(xy[:, 0], xy[:, 1], 'k', zorder=10, alpha=alpha)
+                axes.fill(xy[:, 0], xy[:, 1], 'k', zorder=1, alpha=alpha)
 
         labels, axname = self._make_section_xylabels(section_name, len(axes.get_xticklabels()) - 1)
         pos_list = np.linspace(0, self.model.grid.sections.dist[j], len(labels))
         axes.xaxis.set_major_locator(FixedLocator(nbins=len(labels), locs=pos_list))
         axes.xaxis.set_major_formatter(FixedFormatter((labels)))
-        axes.set(title=self.model.grid.sections.names[j], xlabel=axname, ylabel='Z')
+
+        if not prettify:
+            axes.set(title=self.model.grid.sections.names[j], xlabel=axname, ylabel='Z')
+        else:
+            self.prettify_splot(section_name, j, axes, labels, pos_list, extent)
+
 
     def plot_all_sections(self, show_data=False, section_names=None, show_topo=True,
-                      figsize=(12, 12)):
+                      figsize=(12, 12), prettify=True):
         if self.model.solutions.sections is None:
             raise AttributeError('no sections for plotting defined')
         if self.model.grid.topography is None:
@@ -665,10 +670,12 @@ class PlotSolution(PlotData2D):
             pos_list = np.linspace(0, self.model.grid.sections.dist[j], len(labels))
             axes[i].xaxis.set_major_locator(FixedLocator(nbins=len(labels), locs=pos_list))
             axes[i].xaxis.set_major_formatter(FixedFormatter((labels)))
-            axes[i].set(title=self.model.grid.sections.names[j], xlabel=axname, ylabel='Z')
 
-        #for i in range(len(section_names)):
-            self.prettify_splot(section, i, axes, labels, pos_list, extent)
+            if not prettify:
+                axes[i].set(title=self.model.grid.sections.names[j], xlabel=axname, ylabel='Z')
+
+            else:
+                self.prettify_splot(section, i, axes[i], labels, pos_list, extent)
 
     def prettify_splot(self, sname, n, ax, labels, pos_list, extent):
         #sname = section_names[n]
@@ -678,16 +685,20 @@ class PlotSolution(PlotData2D):
                                             [int(self.model.grid.sections.dist[n]), self.model.grid.regular_grid.extent[4]],
                                             [0, self.model.grid.regular_grid.extent[4]],
                                             a[:-4][0]])).reshape(-1, 2)
-        ax[n].set_xlim(extent[:2])
-        ax[n].set_ylim(extent[2:])
-        ax[n].fill(a[:, 0], a[:, 1], 'w', zorder=2, edgecolor='w', linewidth=0.5)
-        ax[n].plot(bound[:, 0], bound[:, 1], 'k', zorder=100, linewidth=1.2)
-        ax[n].xaxis.set_major_locator(FixedLocator(nbins=len(labels), locs=pos_list))
-        ax[n].xaxis.set_major_formatter(FixedFormatter((labels)))
+        ax.set_xlim(extent[:2])
+        ax.set_ylim(extent[2:])
+        ax.fill(a[:, 0], a[:, 1], 'w', zorder=2, edgecolor='w', linewidth=0.5)
+        ax.plot(bound[:, 0], bound[:, 1], 'k', zorder=11, linewidth=1.2)
+        ax.xaxis.set_major_locator(FixedLocator(nbins=len(labels), locs=pos_list))
+        ax.xaxis.set_major_formatter(FixedFormatter((labels)))
+        textloc = [int(self.model.grid.sections.dist[n]/2),
+                   0.95*self.model.grid.regular_grid.extent[5]]
+        ax.text(textloc[0], textloc[1], sname, fontsize=8, color='k', ha='center', va='top')
 
-        #ax[n].spines['top'].set_visible(False)
-        #ax[n].spines['left'].set_bounds(900, -3000)
-        #ax[n].spines['right'].set_bounds(900, -3000)
+        bounds = [0.9*self.model.grid.regular_grid.extent[5], self.model.grid.regular_grid.extent[4]]
+        ax.spines['top'].set_visible(False)
+        ax.spines['left'].set_bounds(bounds[0], bounds[1])
+        ax.spines['right'].set_bounds(bounds[0], bounds[1])
 
 
     def plot_section_scalarfield(self, section_name, sn, levels=50, show_faults=True, show_topo=True, lithback=True):
