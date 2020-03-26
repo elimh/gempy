@@ -40,13 +40,14 @@ def geo_model():
 
 def test_all_erosion(geo_model):
     sol = gp.compute_model(geo_model, compute_mesh=False)
+    gp.plot.plot_section(geo_model, cell_number=2)
 
     if save:
-        np.save('all_ero', sol.lith_block)
+        np.save(os.path.dirname(__file__)+'/all_ero', sol.lith_block)
 
-    check = np.load('all_ero.npy')
+    check = np.load(os.path.dirname(__file__)+'/all_ero.npy')
     np.testing.assert_allclose(sol.lith_block, check)
-    plt.savefig('all_ero')
+    plt.savefig(os.path.dirname(__file__)+'/all_ero')
 
     print(sol)
 
@@ -55,13 +56,15 @@ def test_one_onlap(geo_model):
     geo_model.set_bottom_relation('Inclined_Series', bottom_relation='Onlap')
     geo_model.set_bottom_relation('Flat_Series', bottom_relation='Erosion')
     sol = gp.compute_model(geo_model, compute_mesh=False)
-    if save:
-        np.save('one_onlap', sol.lith_block)
+    gp.plot.plot_section(geo_model, cell_number=2)
 
-    check = np.load('one_onlap.npy')
+    if save:
+        np.save(os.path.dirname(__file__)+'/one_onlap', sol.lith_block)
+
+    check = np.load(os.path.dirname(__file__)+'/one_onlap.npy')
     np.testing.assert_allclose(sol.lith_block, check)
 
-    plt.savefig('one_onlap')
+    plt.savefig(os.path.dirname(__file__)+'/one_onlap')
 
     print(sol)
 
@@ -72,11 +75,11 @@ def test_two_onlap(geo_model):
     gp.plot.plot_section(geo_model, cell_number=2)
 
     if save:
-        np.save('two_onlap', sol.lith_block)
+        np.save(os.path.dirname(__file__)+'/two_onlap', sol.lith_block)
 
-    check = np.load('two_onlap.npy')
+    check = np.load(os.path.dirname(__file__)+'/two_onlap.npy')
     np.testing.assert_allclose(sol.lith_block, check)
 
-    plt.savefig('two_onlap')
+    plt.savefig(os.path.dirname(__file__)+'/two_onlap')
     print(sol)
 

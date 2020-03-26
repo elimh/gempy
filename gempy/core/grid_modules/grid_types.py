@@ -28,11 +28,13 @@ class RegularGrid:
         dz (float): size of the cells on z
 
     """
-    def __init__(self, extent=None, resolution=None):
+    def __init__(self, extent=None, resolution=None, **kwargs):
         self.resolution = np.ones((0, 3), dtype='int64')
-        self.extent = np.empty(6, dtype='float64')
-        self.values = np.empty((0, 3))
-        self.mask_topo = np.empty((0,3), dtype=bool)
+        self.extent = np.zeros(6, dtype='float64')
+        self.extent_r = np.zeros(6, dtype='float64')
+        self.values = np.zeros((0, 3))
+        self.values_r = np.zeros((0, 3))
+        self.mask_topo = np.zeros((0, 3), dtype=bool)
         if extent is not None and resolution is not None:
             self.set_regular_grid(extent, resolution)
             self.dx, self.dy, self.dz = self.get_dx_dy_dz()
@@ -64,30 +66,49 @@ class RegularGrid:
         values = np.vstack(tuple(map(np.ravel, g))).T.astype("float64")
         return values
 
-    def get_dx_dy_dz(self):
-        dx = (self.extent[1] - self.extent[0]) / self.resolution[0]
-        dy = (self.extent[3] - self.extent[2]) / self.resolution[1]
-        dz = (self.extent[5] - self.extent[4]) / self.resolution[2]
+    def get_dx_dy_dz(self, rescale=False):
+        if rescale is True:
+            dx = (self.extent_r[1] - self.extent_r[0]) / self.resolution[0]
+            dy = (self.extent_r[3] - self.extent_r[2]) / self.resolution[1]
+            dz = (self.extent_r[5] - self.extent_r[4]) / self.resolution[2]
+        else:
+            dx = (self.extent[1] - self.extent[0]) / self.resolution[0]
+            dy = (self.extent[3] - self.extent[2]) / self.resolution[1]
+            dz = (self.extent[5] - self.extent[4]) / self.resolution[2]
         return dx, dy, dz
 
     def set_regular_grid(self, extent, resolution):
         """
         Set a regular grid into the values parameters for further computations
         Args:
-             extent (list):  [x_min, x_max, y_min, y_max, z_min, z_max]
-            resolution (list): [nx, ny, nz]
+             extent (list, np.ndarry):  [x_min, x_max, y_min, y_max, z_min, z_max]
+            resolution (list, np.ndarray): [nx, ny, nz]
         """
 
         self.extent = np.asarray(extent, dtype='float64')
         self.resolution = np.asarray(resolution)
         self.values = self.create_regular_grid_3d(extent, resolution)
         self.length = self.values.shape[0]
+        self.dx, self.dy, self.dz = self.get_dx_dy_dz()
         return self.values
+
+    def set_topography_mask(self, topography):
+
+        ind = topography._find_indices()
+        gridz = self.values[:, 2].reshape(*self.resolution).copy()
+        for x in range(self.resolution[0]):
+            for y in range(self.resolution[1]):
+                z = ind[x, y]
+                gridz[x, y, z:] = 99999
+        mask = (gridz == 99999)
+        self.mask_topo = mask
+        return mask  # np.multiply(np.full(self.regular_grid.values.shape, True).T, mask.ravel()).T
 
 
 class Sections:
     """
     Object that creates a grid of cross sections between two points.
+
     Args:
         regular_grid: Model.grid.regular_grid
         section_dict: {'section name': ([p1_x, p1_y], [p2_x, p2_y], [xyres, zres])}
@@ -97,34 +118,57 @@ class Sections:
             self.z_ext = regular_grid.extent[4:]
         else:
             self.z_ext = z_ext
+
+        self.section_dict = section_dict
+        self.names = []
+        self.points = []
+        self.resolution = []
+        self.length = [0]
+        self.dist = []
+        self.df = pn.DataFrame()
+        self.df['dist'] = self.dist
+        self.values = []
+        self.extent = None
+
         if section_dict is not None:
-            self.section_dict = section_dict
-            self.names = np.array(list(self.section_dict.keys()))
-            self.points = []
-            self.resolution = []
-            self.length = [0]
-            self.dist = []
-            self.get_section_params()
-            self.calculate_all_distances()
-            self.df = pn.DataFrame.from_dict(self.section_dict, orient='index', columns=['start', 'stop', 'resolution'])
-            self.df['dist'] = self.dist
-            self.values = []
-            self.extent = None
-            self.compute_section_coordinates()
+           self.set_sections(section_dict)
 
     def _repr_html_(self):
         return self.df.to_html()
 
+    def __repr__(self):
+        return self.df.to_string()
+
     def show(self):
         pass
 
+    def set_sections(self, section_dict, regular_grid=None, z_ext=None):
+        self.section_dict = section_dict
+        if regular_grid is not None:
+            self.z_ext = regular_grid.extent[4:]
+
+        self.names = np.array(list(self.section_dict.keys()))
+
+        self.get_section_params()
+        self.calculate_all_distances()
+        self.df = pn.DataFrame.from_dict(self.section_dict, orient='index', columns=['start', 'stop', 'resolution'])
+        self.df['dist'] = self.dist
+
+        self.compute_section_coordinates()
+
     def get_section_params(self):
+        self.points = []
+        self.resolution = []
+        self.length = [0]
+
         for i, section in enumerate(self.names):
             points = [self.section_dict[section][0], self.section_dict[section][1]]
             assert points[0] != points[1], 'The start and end points of the section must not be identical.'
+
             self.points.append(points)
             self.resolution.append(self.section_dict[section][2])
-            self.length.append(self.section_dict[section][2][0] * self.section_dict[section][2][1])
+            self.length = np.append(self.length, self.section_dict[section][2][0] *
+                                    self.section_dict[section][2][1])
         self.length = np.array(self.length).cumsum()
 
     def calculate_all_distances(self):

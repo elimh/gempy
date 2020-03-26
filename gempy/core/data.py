@@ -95,14 +95,18 @@ class Grid(object):
         self.custom_grid_grid_active = False
         self.topography = None
         self.topography_grid_active = False
-        self.sections = grid_types.Sections()
         self.sections_grid_active = False
         self.centered_grid = None
         self.centered_grid_active = False
 
         # Init basic grid empty
-        self.regular_grid = self.set_regular_grid(**kwargs)
+        self.regular_grid = self.create_regular_grid(set_active=False, **kwargs)
         self.regular_grid_active = False
+
+        # Init optional sections
+        self.sections = grid_types.Sections(regular_grid=self.regular_grid)
+
+        self.update_grid_values()
 
     def __str__(self):
         return 'Grid Object. Values: \n' + np.array2string(self.values)
@@ -111,7 +115,7 @@ class Grid(object):
         return 'Grid Object. Values: \n' + np.array_repr(self.values)
 
     @setdoc(grid_types.RegularGrid.__doc__)
-    def set_regular_grid(self, *args, **kwargs):
+    def create_regular_grid(self, extent=None, resolution=None, set_active=True, *args, **kwargs):
         """
         Set a new regular grid and activate it.
 
@@ -121,12 +125,13 @@ class Grid(object):
 
         RegularGrid Docs
         """
-        self.regular_grid = grid_types.RegularGrid(*args, **kwargs)
-        self.set_active('regular')
+        self.regular_grid = grid_types.RegularGrid(extent, resolution, **kwargs)
+        if set_active is True:
+            self.set_active('regular')
         return self.regular_grid
 
     @setdoc_pro(ds.coord)
-    def set_custom_grid(self, custom_grid: np.ndarray):
+    def create_custom_grid(self, custom_grid: np.ndarray):
         """
         Set a new regular grid and activate it.
 
@@ -137,7 +142,7 @@ class Grid(object):
         self.custom_grid = grid_types.CustomGrid(custom_grid)
         self.set_active('custom')
 
-    def set_topography(self, source='random', **kwargs):
+    def create_topography(self, source='random', **kwargs):
         """
         Create a topography grid and activate it.
         Args:
@@ -183,13 +188,13 @@ class Grid(object):
         self.set_active('topography')
 
     @setdoc(grid_types.Sections.__doc__)
-    def set_section_grid(self, section_dict):
+    def create_section_grid(self, section_dict):
         self.sections = grid_types.Sections(regular_grid=self.regular_grid, section_dict=section_dict)
         self.set_active('sections')
         return self.sections
 
     @setdoc(grid_types.CenteredGrid.set_centered_grid.__doc__)
-    def set_centered_grid(self, centers, radio, resolution=None):
+    def create_centered_grid(self, centers, radio, resolution=None):
         """Initialize gravity grid. Deactivate the rest of the grids"""
         self.centered_grid = grid_types.CenteredGrid(centers, radio, resolution)
        # self.active_grids = np.zeros(4, dtype=bool)
@@ -260,6 +265,7 @@ class Grid(object):
         where = np.where(self.sections.names == section_name)[0][0]
         return l0 + self.sections.length[where], l0 + self.sections.length[where+1]
 
+
 class Faults(object):
     """
     Class that encapsulate faulting related content. Mainly, which surfaces/surfaces are faults. The fault network
@@ -288,6 +294,8 @@ class Faults(object):
         self.set_is_fault(series_fault=series_fault)
         self.set_fault_relation(rel_matrix=rel_matrix)
         self.n_faults = 0
+
+        self._offset_faults = False
 
     def __repr__(self):
         return self.df.to_string()
@@ -329,6 +337,7 @@ class Faults(object):
 
             self.df['isFinite'] = np.bitwise_and(self.df['isFault'], self.df['isFinite'])
 
+            self.set_default_faults_relations(offset_faults)
             # Update default fault relations
             for a_series in series_fault:
                 col_pos = self.faults_relations_df.columns.get_loc(a_series)
@@ -343,6 +352,28 @@ class Faults(object):
         self.n_faults = self.df['isFault'].sum()
 
         return self
+
+    def set_default_faults_relations(self, offset_faults:bool=None):
+        if offset_faults is not None:
+            self._offset_faults = offset_faults
+
+        offset_faults = self._offset_faults
+
+        try:
+            # Update default fault relations
+            for a_series in self.df.groupby('isFault').get_group(True).index:
+                col_pos = self.faults_relations_df.columns.get_loc(a_series)
+                # set the faults offset all younger
+                self.faults_relations_df.iloc[col_pos, col_pos + 1:] = True
+
+                if offset_faults is False:
+                    # set the faults does not offset the younger faults
+                    self.faults_relations_df.iloc[col_pos] = ~self.df['isFault'] & \
+                                                             self.faults_relations_df.iloc[col_pos]
+            return True
+
+        except KeyError:
+            return False
 
     def set_is_finite_fault(self, series_finite: Union[str, list, np.ndarray] = None, toggle=False):
         """
@@ -432,6 +463,7 @@ class Series(object):
 
         self.df['order_series'] = self.df['order_series'].astype(int)
         self.df['BottomRelation'] = pn.Categorical(['Erosion'], categories=['Erosion', 'Onlap', 'Fault'])
+        self.df['isActive'] = False
 
     def __repr__(self):
         return self.df.to_string()
@@ -529,7 +561,7 @@ class Series(object):
 
         idx = self.df.index.add_categories(series_list)
         self.df.index = idx
-        self.update_faults_index()
+        self.update_faults_index_rename()
 
         for c in series_list:
             self.df.loc[c, 'BottomRelation'] = 'Erosion'
@@ -560,7 +592,7 @@ class Series(object):
 
         idx = self.df.index.remove_unused_categories()
         self.df.index = idx
-        self.update_faults_index()
+        self.update_faults_index_rename()
 
         if reset_order_series is True:
             self.reset_order_series()
@@ -583,7 +615,7 @@ class Series(object):
         """
         idx = self.df.index.rename_categories(new_categories)
         self.df.index = idx
-        self.update_faults_index()
+        self.update_faults_index_rename()
 
         return self
 
@@ -598,8 +630,10 @@ class Series(object):
             Series
         """
         idx = self.df.index.reorder_categories(new_categories).sort_values()
-        self.df.index = idx
-        self.update_faults_index()
+        self.df = self.df.reindex(idx, copy=False)
+        self.reset_order_series()
+        self.update_faults_index_reorder()
+
         return self
 
     def modify_order_series(self, new_value: int, series_name: str):
@@ -618,7 +652,7 @@ class Series(object):
         old_value = group[series_name]
         self.df['order_series'] = group.replace([new_value, old_value], [old_value, new_value])
         self.sort_series()
-        self.update_faults_index()
+        self.update_faults_index_reorder()
 
         return self
 
@@ -626,7 +660,7 @@ class Series(object):
         self.df.sort_values(by='order_series', inplace=True)
         self.df.index = self.df.index.reorder_categories(self.df.index.to_numpy())
 
-    def update_faults_index(self):
+    def update_faults_index_rename(self):
         idx = self.df.index
         self.faults.df.index = idx
         self.faults.faults_relations_df.index = idx
@@ -636,6 +670,16 @@ class Series(object):
         #  We need to add the qgrid special columns to categories
         self.faults.faults_relations_df.columns = self.faults.faults_relations_df.columns.add_categories(
             ['index', 'qgrid_unfiltered_index'])
+
+    def update_faults_index_reorder(self):
+        idx = self.df.index
+        self.faults.df = self.faults.df.reindex(idx, copy=False)
+        self.faults.faults_relations_df = self.faults.faults_relations_df.reindex(idx, axis=0)
+        self.faults.faults_relations_df = self.faults.faults_relations_df.reindex(idx, axis=1)
+
+        self.faults.faults_relations_df.columns = self.faults.faults_relations_df.columns.add_categories(
+            ['index', 'qgrid_unfiltered_index'])
+        self.faults.set_default_faults_relations()
 
 
 class Colors:
@@ -651,8 +695,8 @@ class Colors:
         gp_defcols = ['#015482','#9f0052','#ffbe00','#728f02','#443988','#ff3f20','#5DA629']
 
         # This can be the most horrible code of the whole package
-        for i in [0.6,1,0.8,0.5, 0.9]:
-            s = sns.color_palette(desat=i).as_hex()
+        for i in ['muted', 'pastel', 'deep', 'bright', 'dark', 'colorblind']:
+            s = sns.color_palette(i).as_hex()
             gp_defcols += s
             if len(gp_defcols) >= len(self.surfaces.df):
                 break
@@ -776,16 +820,17 @@ class Surfaces(object):
 
     def __init__(self, series: Series, surface_names=None, values_array=None, properties_names=None):
 
-        self._columns = ['surface', 'series', 'order_surfaces', 'isBasement', 'isFault', 'color', 'vertices', 'edges', 'id']
+        self._columns = ['surface', 'series', 'order_surfaces', 'isBasement', 'isFault', 'isActive','color',
+                         'vertices', 'edges', 'sfai', 'id']
 
-        self._columns_vis_drop = ['vertices', 'edges', 'isBasement', 'isFault']
-        self._n_properties = len(self._columns) -1
+        self._columns_vis_drop = ['vertices', 'edges', 'sfai', 'isBasement', 'isFault']
+        self._n_properties = len(self._columns) - 1
         self.series = series
         self.colors = Colors(self)
 
         df_ = pn.DataFrame(columns=self._columns)
         self.df = df_.astype({'surface': str, 'series': 'category',
-                              'order_surfaces': int, 'isBasement': bool,
+                              'order_surfaces': int, 'isBasement': bool, 'isFault': bool, 'isActive': bool,
                               'color': bool, 'id': int, 'vertices': object, 'edges': object})
 
         if (np.array(sys.version_info[:2]) <= np.array([3, 6])).all():
@@ -1363,6 +1408,8 @@ class SurfacePoints(GeometricData):
 
         self._columns_rep = ['X', 'Y', 'Z', 'surface', 'series']
         self._columns_i_num = ['X', 'Y', 'Z', 'X_r', 'Y_r', 'Z_r']
+        self._columns_i_rend = ['X', 'Y', 'Z', 'surface', 'color']
+
 
         if (np.array(sys.version_info[:2]) <= np.array([3, 6])).all():
             self.df: pn.DataFrame
@@ -1443,9 +1490,13 @@ class SurfacePoints(GeometricData):
         coord_array = np.array([x, y, z])
         assert coord_array.ndim == 1, 'Adding an interface only works one by one.'
         # self.df.loc[idx] = self.df.loc[idx-1]
-        self.df.loc[idx, ['X', 'Y', 'Z']] = coord_array
+        self.df.loc[idx, ['X', 'Y', 'Z']] = coord_array.astype('float64')
 
         try:
+            if self.surfaces.df.groupby('isBasement').get_group(True)['surface'].isin(surface).any():
+                warnings.warn('Surface Points for the basement will not be used. Maybe you are missing an extra'
+                              'layer at the bottom of the pile.')
+
             self.df.loc[idx, 'surface'] = surface
         # ToDO test this
         except ValueError as error:
@@ -1499,8 +1550,18 @@ class SurfacePoints(GeometricData):
             :class:`SurfacePoints`
          """
         idx = np.array(idx, ndmin=1)
-        keys = list(kwargs.keys())
-        is_surface = np.isin('surface', keys).all()
+        try:
+            surface_names = kwargs.pop('surface')
+            self.df.loc[idx, ['surface']] = surface_names
+            self.map_data_from_surfaces(self.surfaces, 'series', idx=idx)
+            self.map_data_from_surfaces(self.surfaces, 'id', idx=idx)
+            self.map_data_from_series(self.surfaces.series, 'order_series', idx=idx)
+            self.sort_table()
+        except KeyError:
+            pass
+
+        # keys = list(kwargs.keys())
+    #    is_surface = np.isin('surface', keys).all()
 
         # Check idx exist in the df
         assert np.isin(np.atleast_1d(idx), self.df.index).all(), 'Indices must exist in the dataframe to be modified.'
@@ -1518,11 +1579,11 @@ class SurfacePoints(GeometricData):
         # Selecting the properties passed to be modified
         self.df.loc[idx, list(kwargs.keys())] = values
 
-        if is_surface:
-            self.map_data_from_surfaces(self.surfaces, 'series', idx=idx)
-            self.map_data_from_surfaces(self.surfaces, 'id', idx=idx)
-            self.map_data_from_series(self.surfaces.series, 'order_series', idx=idx)
-            self.sort_table()
+        # if is_surface:
+        #     self.map_data_from_surfaces(self.surfaces, 'series', idx=idx)
+        #     self.map_data_from_surfaces(self.surfaces, 'id', idx=idx)
+        #     self.map_data_from_series(self.surfaces.series, 'order_series', idx=idx)
+        #     self.sort_table()
 
         return self
 
@@ -1550,6 +1611,8 @@ class SurfacePoints(GeometricData):
         See Also:
             :meth:`GeometricData.read_data`
         """
+        # TODO read by default either formation or surface
+
         if 'sep' not in kwargs:
             kwargs['sep'] = ','
 
@@ -1632,6 +1695,8 @@ class Orientations(GeometricData):
         self._columns_o_1 = ['X', 'Y', 'Z', 'X_r', 'Y_r', 'Z_r', 'G_x', 'G_y', 'G_z', 'dip', 'azimuth', 'polarity',
                              'surface', 'series', 'id', 'order_series', 'isFault']
         self._columns_o_num = ['X', 'Y', 'Z', 'X_r', 'Y_r', 'Z_r', 'G_x', 'G_y', 'G_z', 'dip', 'azimuth', 'polarity']
+        self._columns_o_rend = ['X', 'Y', 'Z', 'G_x', 'G_y', 'G_z', 'surface', 'color']
+
         if (np.array(sys.version_info[:2]) <= np.array([3, 6])).all():
             self.df: pn.DataFrame
 
@@ -1730,7 +1795,7 @@ class Orientations(GeometricData):
             self.df.loc[idx] = self.df.loc[max_idx]
 
         if pole_vector is not None:
-            self.df.loc[idx, ['X', 'Y', 'Z', 'G_x', 'G_y', 'G_z']] = np.array([x, y, z, *pole_vector])
+            self.df.loc[idx, ['X', 'Y', 'Z', 'G_x', 'G_y', 'G_z']] = np.array([x, y, z, *pole_vector], dtype=float)
             self.df.loc[idx, 'surface'] = surface
 
             self.calculate_orientations(idx)
@@ -1739,8 +1804,8 @@ class Orientations(GeometricData):
                 warnings.warn('If pole_vector and orientation are passed pole_vector is used/')
         else:
             if orientation is not None:
-                self.df.loc[idx, ['X', 'Y', 'Z', ]] = np.array([x, y, z])
-                self.df.loc[idx, ['azimuth', 'dip', 'polarity']] = orientation
+                self.df.loc[idx, ['X', 'Y', 'Z', ]] = np.array([x, y, z], dtype=float)
+                self.df.loc[idx, ['azimuth', 'dip', 'polarity']] = np.array(orientation, dtype=float)
                 self.df.loc[idx, 'surface'] = surface
 
                 self.calculate_gradient(idx)
@@ -1798,8 +1863,19 @@ class Orientations(GeometricData):
          """
 
         idx = np.array(idx, ndmin=1)
+        try:
+            surface_names = kwargs.pop('surface')
+            self.df.loc[idx, ['surface']] = surface_names
+            self.map_data_from_surfaces(self.surfaces, 'series', idx=idx)
+            self.map_data_from_surfaces(self.surfaces, 'id', idx=idx)
+            self.map_data_from_series(self.surfaces.series, 'order_series', idx=idx)
+            self.sort_table()
+        except KeyError:
+            pass
+
         keys = list(kwargs.keys())
-        is_surface = np.isin('surface', keys).all()
+        # is_surface_ = np.isin('surface', keys)
+        # is_surface = is_surface_.all()
 
         # Check idx exist in the df
         assert np.isin(np.atleast_1d(idx), self.df.index).all(), 'Indices must exist in the dataframe to be modified.'
@@ -1818,19 +1894,13 @@ class Orientations(GeometricData):
             values = values.T
 
         # Selecting the properties passed to be modified
-        self.df.loc[idx, list(kwargs.keys())] = values
+        self.df.loc[idx, list(kwargs.keys())] = values.astype('float64')
 
         if np.isin(list(kwargs.keys()), ['G_x', 'G_y', 'G_z']).any():
             self.calculate_orientations(idx)
         else:
             if np.isin(list(kwargs.keys()), ['azimuth', 'dip', 'polarity']).any():
                 self.calculate_gradient(idx)
-
-        if is_surface:
-            self.map_data_from_surfaces(self.surfaces, 'series', idx=idx)
-            self.map_data_from_surfaces(self.surfaces, 'id', idx=idx)
-            self.map_data_from_series(self.surfaces.series, 'order_series', idx=idx)
-            self.sort_table()
         return self
 
     def calculate_gradient(self, idx=None):
@@ -2393,15 +2463,17 @@ class RescaledData(object):
     def rescale_grid(grid, rescaling_factor, centers: pn.DataFrame):
         new_grid_extent = (grid.regular_grid.extent - np.repeat(centers, 2)) / rescaling_factor + 0.5001
         new_grid_values = (grid.values - centers) / rescaling_factor + 0.5001
-        return new_grid_extent, new_grid_values
+        return new_grid_extent, new_grid_values,
 
     def set_rescaled_grid(self):
         """
         Set the rescaled coordinates and extent into a grid object
         """
 
-        self.grid.extent_r, self.grid.values_r = self.rescale_grid(self.grid, self.df.loc['values', 'rescaling factor'],
-                                                                   self.df.loc['values', 'centers'])
+        self.grid.extent_r, self.grid.values_r = self.rescale_grid(
+            self.grid, self.df.loc['values', 'rescaling factor'], self.df.loc['values', 'centers'])
+
+        self.grid.regular_grid.extent_r, self.grid.regular_grid.values_r = self.grid.extent_r, self.grid.values_r
 
 
 @setdoc_pro([SurfacePoints.__doc__, Orientations.__doc__, Surfaces.__doc__, Faults.__doc__])
@@ -2483,7 +2555,7 @@ class Structure(object):
         # Extracting lengths
         # ==================
         # Array containing the size of every surface. SurfacePoints
-        lssp = self.surface_points.df.groupby('surface')['order_series'].count().values
+        lssp = self.surface_points.df.groupby('id')['order_series'].count().values
         lssp_nonzero = lssp[np.nonzero(lssp)]
 
         self.df.at['values', 'len surfaces surface_points'] = lssp_nonzero
@@ -2607,8 +2679,8 @@ class Options(object):
         self.df['dtype'].cat.set_categories(['float32', 'float64'], inplace=True)
         self.df['theano_optimizer'].cat.set_categories(['fast_run', 'fast_compile'], inplace=True)
         self.df['device'].cat.set_categories(['cpu', 'cuda'], inplace=True)
-        self.df['output'].cat.set_categories(['geology', 'gradients'], inplace=True)
-        self.df.at['values', 'verbosity'] = []
+       # self.df['output'].cat.set_categories(['geology', 'gradients'], inplace=True)
+       # self.df.at['values', 'verbosity'] = []
         self.default_options()
 
     def __repr__(self):
@@ -2648,7 +2720,7 @@ class Options(object):
         else:
             self.df.loc['values', 'dtype'] = 'float32'
 
-        self.df.loc['values', 'output'] = 'geology'
+       # self.df.loc['values', 'output'] = 'geology'
         self.df.loc['values', 'theano_optimizer'] = 'fast_compile'
         return True
 
@@ -2762,6 +2834,10 @@ class KrigingParameters(object):
         """
         if extent is None:
             extent = self.grid.regular_grid.extent
+            if np.sum(extent) == 0 and self.grid.values.shape[0] > 1:
+                extent = np.concatenate((np.min(self.grid.values, axis=0),
+                                         np.max(self.grid.values, axis=0)))[[0, 3, 1, 4, 2, 5]]
+
         try:
             range_var = np.sqrt(
                 (extent[0] - extent[1]) ** 2 +
@@ -2810,8 +2886,8 @@ class KrigingParameters(object):
         if u_grade is None:
 
             len_series_i = self.structure.df.loc['values', 'len series surface_points']
-            u_grade = np.zeros_like(len_series_i)
-            u_grade[(len_series_i > 1)] = 1
+            u_grade = np.ones_like(len_series_i)
+            # u_grade[(len_series_i > 1)] = 1
 
         else:
             u_grade = np.array(u_grade)

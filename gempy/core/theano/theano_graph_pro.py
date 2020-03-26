@@ -141,7 +141,6 @@ class TheanoGraphPro(object):
             output = ['geology']
         self.output = output
 
-
         if verbose is None:
             self.verbose = [None]
         else:
@@ -168,7 +167,7 @@ class TheanoGraphPro(object):
         # -------
         self.a_T = theano.shared(np.cast[dtype](-1.), "Range")
 
-        self.a_T_surface =  self.a_T #theano.shared(np.cast[dtype](0.1), "Range")
+        self.a_T_surface = self.a_T # theano.shared(np.cast[dtype](0.1), "Range")
         self.c_o_T = theano.shared(np.cast[dtype](-1.), 'Covariance at 0')
 
         self.n_universal_eq_T = theano.shared(np.zeros(5, dtype='int32'), "Grade of the universal drift")
@@ -273,6 +272,7 @@ class TheanoGraphPro(object):
             self.not_l = theano.shared(np.array(50., dtype=dtype), 'Sigmoid Outside')
             self.ellipse_factor_exponent = theano.shared(np.array(2., dtype=dtype), 'Attenuation factor')
 
+        # It is a matrix because of the values: porosity, sus, etc
         self.values_properties_op = T.matrix('Values that the blocks are taking')
 
         self.n_surface = T.arange(1, 5000, dtype='int32')
@@ -409,7 +409,8 @@ class TheanoGraphPro(object):
                 dict(initial=self.sfai_op),
                 dict(initial=self.mask_op2),
                 dict(initial=self.mask_matrix_f),
-                dict(initial=self.fault_matrix)
+                dict(initial=self.fault_matrix),
+                dict(initial=T.cast(0, 'int64'))
 
             ],  # This line may be used for the df network
             sequences=[dict(input=self.len_series_i, taps=[0, 1]),
@@ -437,8 +438,9 @@ class TheanoGraphPro(object):
         self.sfai_op = series[3][-1]
 
         mask = series[4][-1]
-        self.mask_op2 = mask
+        #self.mask_op2 = mask
         mask_rev_cumprod = T.vertical_stack(mask[[-1]], T.cumprod(T.invert(mask[:-1]), axis=0))
+        self.mask_op2 = mask_rev_cumprod
         block_mask = mask * mask_rev_cumprod
 
         fault_mask = series[5][-1]
@@ -1794,7 +1796,7 @@ class TheanoGraphPro(object):
                          is_finite=np.array(False), is_erosion=np.array(True), is_onlap=np.array(False),
                          n_series=0,
                          block_matrix=None, weights_vector=None, scalar_field_matrix=None, sfai=None, mask_matrix=None,
-                         mask_matrix_f=None, fault_matrix=None, grid=None, shift=None
+                         mask_matrix_f=None, fault_matrix=None, nsle=0, grid=None, shift=None
                          ):
         """
         Function that loops each fault, generating a potential field for each on them with the respective block model
@@ -1887,10 +1889,16 @@ class TheanoGraphPro(object):
 
         scalar_field_at_surface_points = self.get_scalar_field_at_surface_points(Z_x, self.npf_op)
 
+        if 'sfai' in self.verbose:
+            scalar_field_at_surface_points = theano.printing.Print('sfai')(scalar_field_at_surface_points)
+
         # TODO: add control flow for this side
-        mask_e = tif.ifelse(is_erosion, # If is erosion
+        mask_e = tif.ifelse(is_erosion,# If is erosion
                             T.gt(Z_x, T.min(scalar_field_at_surface_points)), # It is True the values over the last surface
                             ~ self.is_fault[n_series] * T.ones_like(Z_x, dtype='bool')) # else: all False if is Fault else all ones
+
+        if 'mask_e' in self.verbose:
+            mask_e = theano.printing.Print('mask_e')(mask_e)
 
         #c= theano.printing.Print('is_erosion')(self.is_erosion)
         # b = theano.printing.Print('b')(c[:n_series + 1])
@@ -1911,10 +1919,24 @@ class TheanoGraphPro(object):
 
         # Number of series since last erode: This is necessary in case there are multiple consecutives onlaps
 
+        # Erosion version
         is_erosion_ = self.is_erosion[:n_series + 1]
-        args_is_erosion =T.nonzero(T.concatenate(([1], is_erosion_)))
+        args_is_erosion = T.nonzero(T.concatenate(([1], is_erosion_)))
         last_erode = T.argmax(args_is_erosion[0])
-        nsle = T.max(T.stack([n_series - last_erode, 1]))
+
+        # Onlap version
+        is_onlap_or_fault = self.is_onlap[n_series] + self.is_fault[n_series]
+
+        #       This adds a counter  --- check series onlap-fault --- check the chain starts with onlap
+        nsle = (nsle + is_onlap_or_fault) * is_onlap_or_fault * self.is_onlap[n_series - nsle]
+        nsle_op = nsle#T.max([nsle, 1])
+
+        #args_is_onlap = T.nonzero(T.concatenate(([0], is_erosion_)))
+        #nsle = T.max(T.stack([n_series - last_erode, 1]))
+
+        if 'nsle' in self.verbose:
+            nsle_op = theano.printing.Print('nsle_op')(nsle_op)
+
         mask_o = tif.ifelse(is_onlap,
                             T.gt(Z_x, T.max(scalar_field_at_surface_points)),
                             mask_matrix[n_series - 1, shift:x_to_interpolate_shape + shift])
@@ -1926,15 +1948,17 @@ class TheanoGraphPro(object):
         if self.gradient is False:
             block = tif.ifelse(
                 compute_block_ctr,
-                tif.ifelse(is_finite,
-                           self.compute_fault_block(
-                                         Z_x, scalar_field_at_surface_points,
-                                         self.values_properties_op[:, n_form_per_serie_0: n_form_per_serie_1 + 1],
-                                         n_series, grid
-                                     ),
+                tif.ifelse(
+                    is_finite,
+                    self.compute_fault_block(
+                         Z_x, scalar_field_at_surface_points,
+                         self.values_properties_op[:, n_form_per_serie_0: n_form_per_serie_1 + 1],
+                         n_series, grid
+                    ),
                            self.compute_formation_block(
                                          Z_x, scalar_field_at_surface_points,
-                                         self.values_properties_op[:, n_form_per_serie_0: n_form_per_serie_1 + 1])),
+                                         self.values_properties_op[:, n_form_per_serie_0: n_form_per_serie_1 + 1])
+                ),
                 block_matrix[n_series, :]
             )
         else:
@@ -1953,9 +1977,13 @@ class TheanoGraphPro(object):
         # LITH MASK
         mask_matrix = T.set_subtensor(mask_matrix[n_series - 1: n_series, shift:x_to_interpolate_shape + shift], mask_o)
 
-        mask_matrix = T.set_subtensor(mask_matrix[n_series - nsle: n_series, shift:x_to_interpolate_shape + shift],
-                                      T.cumprod(mask_matrix[n_series - nsle: n_series, shift:x_to_interpolate_shape + shift][::-1], axis=0)[::-1])
+        mask_matrix = T.set_subtensor(mask_matrix[n_series - nsle_op: n_series, shift:x_to_interpolate_shape + shift],
+                                      T.cumprod(mask_matrix[n_series - nsle_op: n_series, shift:x_to_interpolate_shape + shift][::-1], axis=0)[::-1])
+
         mask_matrix = T.set_subtensor(mask_matrix[n_series, shift:x_to_interpolate_shape + shift], mask_e)
+
+        if 'mask_matrix_loop' in self.verbose:
+            mask_matrix = theano.printing.Print('mask_matrix_loop')(mask_matrix)
 
         # FAULT MASK
         # This creates a matrix with Trues in the positive side of the faults. When is not faults is 0
@@ -1971,7 +1999,7 @@ class TheanoGraphPro(object):
         # Scalar field at interfaces
         sfai = T.set_subtensor(sfai[n_series, n_surface_op-1], scalar_field_at_surface_points)
 
-        return block_matrix, weights_vector, scalar_field_matrix, sfai, mask_matrix, mask_matrix_f, fault_matrix
+        return block_matrix, weights_vector, scalar_field_matrix, sfai, mask_matrix, mask_matrix_f, fault_matrix, nsle
 
     def compute_forward_gravity(self, densities=None, pos_density=None):  # densities, tz, select,
 

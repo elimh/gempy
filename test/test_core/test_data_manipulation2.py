@@ -15,6 +15,7 @@ import pytest
 mm = gp.DataMutation()
 mm.add_surfaces(['surface1', 'foo1', 'foo2', 'foo3'])
 
+
 def test_add_surface_points_raise_non_surface():
     with pytest.raises(ValueError):
         mm.add_surface_points(400, 300, -500, 'surface5')
@@ -83,5 +84,9 @@ def test_add_default_orientation():
 def test_set_is_fault():
     mm = gp.DataMutation()
     mm.add_series(['foo1', 'foo2', 'foo3'])
+    assert (mm.faults.df.index == np.array(['Default series', 'foo1', 'foo2', 'foo3'])).all()
+    assert (mm.faults.faults_relations_df.index == ['Default series', 'foo1', 'foo2', 'foo3']).all()
     mm.set_is_fault(['foo2'])
+    assert mm.faults.faults_relations_df.loc['foo2', 'foo3'] == True
+    assert mm.faults.faults_relations_df.iloc[2,3] == True
     mm.set_is_fault(['foo2'], toggle=True)
